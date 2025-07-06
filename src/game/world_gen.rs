@@ -318,6 +318,24 @@ pub enum GeologyType {
     Basalt = 9,
 }
 
+impl GeologyType {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => GeologyType::OceanicCrust,
+            1 => GeologyType::ContinentalShelf,
+            2 => GeologyType::Sedimentary,
+            3 => GeologyType::Igneous,
+            4 => GeologyType::Metamorphic,
+            5 => GeologyType::Volcanic,
+            6 => GeologyType::Limestone,
+            7 => GeologyType::Sandstone,
+            8 => GeologyType::Granite,
+            9 => GeologyType::Basalt,
+            _ => GeologyType::Sedimentary,
+        }
+    }
+}
+
 pub struct WorldGenerator {
     pub map_radius: i32,
     pub tiles: HashMap<HexCoord, WorldTile>,
@@ -356,7 +374,7 @@ impl WorldGenerator {
         // Phase 2: Hydrological Cycle
         println!("Phase 2: Hydrological systems...");
         self.create_drainage_basins();
-        self.generate_rivers();
+
         self.mark_coastal_features();
         
         // Phase 3: Climate Simulation
@@ -368,6 +386,7 @@ impl WorldGenerator {
         // Phase 4: Ecological Systems
         println!("Phase 4: Biome assignment...");
         self.assign_biomes();
+        self.generate_rivers();
         self.refine_river_network(); // Add more rivers in appropriate biomes
         self.place_lakes(); // After biomes are assigned for better threshold calculation
         self.calculate_soil_fertility();
@@ -720,7 +739,7 @@ impl WorldGenerator {
     }
 
     fn generate_rivers(&mut self) {
-        println!("=== HYDROLOGICAL SIMULATION ===");
+        println!("=== IMPROVED HYDROLOGICAL SIMULATION ===");
         
         // Step 1: Calculate flow direction for every tile
         self.calculate_flow_directions();
@@ -728,15 +747,256 @@ impl WorldGenerator {
         // Step 2: Calculate flow accumulation (watershed collection)
         self.calculate_flow_accumulation();
         
-        // Step 3: Generate river network based on flow accumulation
-        self.generate_river_network();
+        // Step 3: Find river sources (high elevation, good precipitation)
+        let river_sources = self.find_river_sources();
         
-        // Step 4: Calculate river flow rates
+        // Step 4: Trace river paths from sources to create connected networks
+        self.trace_river_networks(river_sources);
+        
+        // Step 5: Calculate river flow rates based on accumulated water
         self.calculate_river_flow_rates();
         
         let river_count = self.tiles.values().filter(|t| t.has_river).count();
         let total_flow: f32 = self.tiles.values().map(|t| t.river_flow).sum();
         println!("Created rivers on {} tiles (total flow: {:.0})", river_count, total_flow);
+    }
+
+    fn find_river_sources(&self) -> Vec<HexCoord> {
+        let mut sources = Vec::new();
+        
+        for (coord, tile) in &self.tiles {
+            // Only consider land tiles
+            if tile.elevation <= self.sea_level {
+                continue;
+            }
+            
+            // Calculate elevation factor (how high above sea level)
+            let elevation_above_sea = tile.elevation - self.sea_level;
+            let max_elevation_above_sea = 1.0 - self.sea_level; // Maximum possible elevation above sea level
+            let elevation_factor = if max_elevation_above_sea > 0.0 {
+                elevation_above_sea / max_elevation_above_sea
+            } else {
+                0.0
+            };
+            
+            // Precipitation factor (how wet this area is)
+            let precip_factor = tile.precipitation;
+            
+            // Check if this is a local high point (higher than most neighbors)
+            let neighbors = coord.neighbors();
+            let mut higher_neighbors = 0;
+            let mut total_neighbors = 0;
+            let mut neighbor_elevation_sum = 0.0;
+            
+            for neighbor in neighbors {
+                if let Some(neighbor_tile) = self.tiles.get(&neighbor) {
+                    if neighbor_tile.elevation > tile.elevation {
+                        higher_neighbors += 1;
+                    }
+                    neighbor_elevation_sum += neighbor_tile.elevation;
+                    total_neighbors += 1;
+                }
+            }
+            
+            let is_local_high = if total_neighbors > 0 {
+                higher_neighbors <= 2 // At most 2 neighbors higher
+            } else {
+                false
+            };
+            
+            // Additional criteria for better river sources
+            let avg_neighbor_elevation = if total_neighbors > 0 {
+                neighbor_elevation_sum / total_neighbors as f32
+            } else {
+                tile.elevation
+            };
+            
+            let elevation_dominance = (tile.elevation - avg_neighbor_elevation).max(0.0);
+            
+            // More lenient source criteria
+            let base_score = elevation_factor * 0.4 + precip_factor * 0.5 + elevation_dominance * 2.0;
+            let local_high_bonus = if is_local_high { 0.3 } else { 0.0 };
+            let source_score = base_score + local_high_bonus;
+            
+            // Much more lenient thresholds
+            let min_elevation_factor = 0.15; // Lowered from 0.3
+            let min_precip_factor = 0.2;     // Lowered from 0.3
+            let min_source_score = 0.4;      // Lowered from 0.6
+            
+            // Additional biome-based criteria (some biomes should have more rivers)
+            let biome_bonus = match BiomeType::from_u8(tile.biome) {
+                BiomeType::TropicalRainforest => 0.3,
+                BiomeType::TemperateRainforest => 0.3,
+                BiomeType::TropicalSeasonalForest => 0.2,
+                BiomeType::TemperateDeciduousForest => 0.2,
+                BiomeType::MontaneForest => 0.2,
+                BiomeType::TaigaBorealForest => 0.1,
+                _ => 0.0,
+            };
+            
+            let final_score = source_score + biome_bonus;
+            
+            // Check if this qualifies as a river source
+            if final_score > min_source_score && 
+               elevation_factor > min_elevation_factor && 
+               precip_factor > min_precip_factor {
+                sources.push(*coord);
+            }
+        }
+        
+        // If we still don't have enough sources, add some based on just elevation and precipitation
+        if sources.len() < 10 {
+            let mut backup_sources = Vec::new();
+            
+            for (coord, tile) in &self.tiles {
+                if tile.elevation <= self.sea_level {
+                    continue;
+                }
+                
+                let elevation_above_sea = tile.elevation - self.sea_level;
+                let max_elevation_above_sea = 1.0 - self.sea_level;
+                let elevation_factor = if max_elevation_above_sea > 0.0 {
+                    elevation_above_sea / max_elevation_above_sea
+                } else {
+                    0.0
+                };
+                
+                // Very simple backup criteria
+                if elevation_factor > 0.4 && tile.precipitation > 0.3 {
+                    backup_sources.push(*coord);
+                }
+            }
+            
+            // Sort backup sources by elevation and precipitation
+            backup_sources.sort_by(|a, b| {
+                let tile_a = &self.tiles[a];
+                let tile_b = &self.tiles[b];
+                let score_a = tile_a.elevation + tile_a.precipitation;
+                let score_b = tile_b.elevation + tile_b.precipitation;
+                score_b.partial_cmp(&score_a).unwrap()
+            });
+            
+            // Add best backup sources
+            for source in backup_sources.into_iter().take(20) {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+        }
+        
+        println!("Found {} potential river sources (sea level: {:.3}, max elevation: {:.3})", 
+                 sources.len(), self.sea_level, 
+                 self.tiles.values().map(|t| t.elevation).fold(f32::NEG_INFINITY, f32::max));
+        
+        // Debug: show some example source criteria
+        if sources.len() > 0 {
+            let example_coord = sources[0];
+            let example_tile = &self.tiles[&example_coord];
+            let elevation_above_sea = example_tile.elevation - self.sea_level;
+            let max_elevation_above_sea = 1.0 - self.sea_level;
+            let elevation_factor = elevation_above_sea / max_elevation_above_sea;
+            
+            println!("Example river source at ({}, {}): elevation {:.3} (factor: {:.2}), precipitation {:.2}", 
+                     example_coord.q, example_coord.r, 
+                     example_tile.elevation, elevation_factor, example_tile.precipitation);
+        }
+        
+        sources
+    }
+
+    fn trace_river_networks(&mut self, sources: Vec<HexCoord>) {
+        let mut river_networks = Vec::new();
+        
+        for source in sources {
+            let mut river_path = Vec::new();
+            let mut current = source;
+            let mut visited = std::collections::HashSet::new();
+            
+            // Trace downhill until we reach ocean or a loop
+            while visited.insert(current) {
+                river_path.push(current);
+                
+                // Check if we've reached the ocean or a lake
+                if let Some(tile) = self.tiles.get(&current) {
+                    if tile.elevation <= self.sea_level {
+                        break;
+                    }
+                }
+                
+                // Find the next tile in the flow direction
+                if let Some((_, next_coord)) = self.flow_directions.get(&current) {
+                    // Check if the next tile is lower (more lenient elevation difference)
+                    if let (Some(current_tile), Some(next_tile)) = (self.tiles.get(&current), self.tiles.get(next_coord)) {
+                        let elevation_drop = current_tile.elevation - next_tile.elevation;
+                        
+                        // More lenient elevation drop requirement
+                        if elevation_drop >= 0.0 { // Allow even very small drops
+                            current = *next_coord;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                
+                // Prevent infinite loops
+                if river_path.len() > 200 {
+                    break;
+                }
+            }
+            
+            // More lenient river creation criteria
+            if river_path.len() >= 2 { // Reduced from 3
+                // Calculate total flow for this path
+                let total_path_flow: f32 = river_path.iter()
+                    .map(|coord| self.flow_accumulation.get(coord).copied().unwrap_or(1.0))
+                    .sum();
+                
+                let avg_flow = total_path_flow / river_path.len() as f32;
+                
+                // Much more lenient flow requirement
+                if avg_flow >= 1.0 { // Reduced from 2.0
+                    river_networks.push(river_path);
+                }
+            }
+        }
+        
+        // Sort networks by total flow (create major rivers first)
+        river_networks.sort_by(|a, b| {
+            let flow_a: f32 = a.iter()
+                .map(|coord| self.flow_accumulation.get(coord).copied().unwrap_or(1.0))
+                .sum();
+            let flow_b: f32 = b.iter()
+                .map(|coord| self.flow_accumulation.get(coord).copied().unwrap_or(1.0))
+                .sum();
+            flow_b.partial_cmp(&flow_a).unwrap()
+        });
+        
+        // Create rivers along these networks
+        let mut total_river_tiles = 0;
+        for (network_idx, river_path) in river_networks.iter().enumerate() {
+            // Allow more river networks
+            if network_idx >= 100 { // Increased from 50
+                break;
+            }
+            
+            for &coord in river_path {
+                if let Some(tile) = self.tiles.get_mut(&coord) {
+                    // Only create river if tile is above sea level
+                    if tile.elevation > self.sea_level {
+                        tile.has_river = true;
+                        total_river_tiles += 1;
+                    }
+                }
+            }
+        }
+        
+        println!("Created {} river networks with {} total river tiles", 
+                 river_networks.len().min(100), 
+                 total_river_tiles);
     }
 
     fn calculate_flow_directions(&mut self) {
@@ -782,11 +1042,14 @@ impl WorldGenerator {
         let coords: Vec<HexCoord> = self.tiles.keys().cloned().collect();
         let mut flow_accumulation = HashMap::new();
         
-        // Initialize: every land tile contributes 1 unit of water
+        // Initialize: every land tile contributes based on precipitation
         for coord in &coords {
             let tile = &self.tiles[coord];
             if tile.elevation > self.sea_level {
-                flow_accumulation.insert(*coord, 1.0f32);
+                // Base contribution is 1.0, modified by precipitation
+                let base_contribution = 1.0;
+                let precip_bonus = tile.precipitation * 2.0; // Precipitation adds significant flow
+                flow_accumulation.insert(*coord, base_contribution + precip_bonus);
             }
         }
         
@@ -805,10 +1068,10 @@ impl WorldGenerator {
                 // Add this tile's flow to the target tile
                 *flow_accumulation.entry(*target).or_insert(0.0) += source_flow;
                 
-                // Add precipitation bonus based on climate
+                // Bonus for geological drainage
                 let tile = &self.tiles[&coord];
-                let precip_bonus = tile.precipitation * 0.5;
-                *flow_accumulation.entry(*target).or_insert(0.0) += precip_bonus;
+                let drainage_bonus = tile.drainage * 0.3;
+                *flow_accumulation.entry(*target).or_insert(0.0) += drainage_bonus;
             }
         }
         
@@ -819,38 +1082,18 @@ impl WorldGenerator {
         println!("Calculated flow accumulation: {} tiles, max flow: {:.1}", tiles_with_flow, max_flow);
     }
 
-    fn generate_river_network(&mut self) {
-        // Create rivers where flow accumulation exceeds threshold
-        let mut river_tiles = 0;
-        
-        for (coord, &flow) in &self.flow_accumulation {
-            let tile = self.tiles.get_mut(coord).unwrap();
-            
-            // Base threshold adjusted by precipitation and elevation
-            let precip_factor = (1.0 - tile.precipitation * 0.5).max(0.3); // Wetter = lower threshold
-            let elevation_factor = if tile.elevation > self.sea_level + 0.3 { 0.8 } else { 1.0 }; // Mountains = lower threshold
-            
-            let base_threshold = 4.0; // Base flow accumulation needed for a river
-            let threshold = base_threshold * precip_factor * elevation_factor;
-            
-            if flow >= threshold {
-                tile.has_river = true;
-                river_tiles += 1;
-            }
-        }
-        
-        println!("Generated {} river tiles based on flow accumulation", river_tiles);
-    }
-
     fn calculate_river_flow_rates(&mut self) {
-        // Set river flow based on accumulated water
+        // Set river flow based on accumulated water, but only for tiles that have rivers
         let max_flow = self.flow_accumulation.values().fold(0.0f32, |a, &b| a.max(b));
         
         for (coord, &flow) in &self.flow_accumulation {
             if let Some(tile) = self.tiles.get_mut(coord) {
                 if tile.has_river {
-                    // Normalize flow to 0.1-1.0 range
-                    tile.river_flow = (flow / max_flow).max(0.1).min(1.0);
+                    // Normalize flow to 0.1-1.0 range, but weight towards higher flows
+                    let normalized_flow = (flow / max_flow).max(0.1).min(1.0);
+                    
+                    // Apply a curve to make flow differences more visible
+                    tile.river_flow = normalized_flow.powf(0.7); // Power less than 1 to reduce extreme differences
                 }
             }
         }
@@ -860,7 +1103,7 @@ impl WorldGenerator {
     }
 
     fn set_river_edges(&mut self) {
-        // Connect rivers along flow directions
+        // Connect rivers along flow directions, but only for tiles that actually have rivers
         let flow_directions = self.flow_directions.clone();
         
         for (source_coord, (direction, target_coord)) in flow_directions {
@@ -869,8 +1112,8 @@ impl WorldGenerator {
             let target_has_river = self.tiles.get(&target_coord)
                 .map(|t| t.has_river).unwrap_or(false);
             
-            // Draw river edge if either source or target has a river
-            if source_has_river || target_has_river {
+            // Only draw river edge if both source and target have rivers (connected stream)
+            if source_has_river && target_has_river {
                 if let Some(source_tile) = self.tiles.get_mut(&source_coord) {
                     source_tile.river_edges[direction] = true;
                 }
@@ -1115,39 +1358,48 @@ impl WorldGenerator {
     }
 
     fn refine_river_network(&mut self) {
-        // Add more rivers in biomes that should have dense river networks
-        let mut additional_rivers = 0;
+        // Instead of adding more scattered rivers, this method now focuses on improving existing rivers
+        let mut improvements = 0;
         
-        for (coord, &flow) in &self.flow_accumulation.clone() {
-            let tile = &self.tiles[&coord];
+        // Add tributaries to major rivers
+        let main_river_coords: Vec<HexCoord> = self.tiles.iter()
+            .filter(|(_, tile)| tile.has_river && tile.river_flow > 0.5)
+            .map(|(coord, _)| *coord)
+            .collect();
+        
+        for river_coord in main_river_coords {
+            let neighbors = river_coord.neighbors();
             
-            // Skip if already has a river
-            if tile.has_river {
-                continue;
-            }
-            
-            // Biome-specific thresholds for additional rivers
-            let biome_threshold = match BiomeType::from_u8(tile.biome) {
-                BiomeType::TropicalRainforest => 2.0,
-                BiomeType::TemperateRainforest => 2.5,
-                BiomeType::TropicalSeasonalForest | BiomeType::TemperateDeciduousForest => 3.0,
-                BiomeType::TemperateGrassland | BiomeType::TaigaBorealForest => 3.5,
-                BiomeType::TemperateConiferForest => 4.0,
-                BiomeType::TundraWet | BiomeType::Wetland => 3.0,
-                BiomeType::Shrubland => 6.0,
-                BiomeType::HotDesert | BiomeType::ColdDesert => 12.0,
-                BiomeType::TundraBarren => 8.0,
-                _ => 5.0,
-            };
-            
-            if flow >= biome_threshold {
-                self.tiles.get_mut(&coord).unwrap().has_river = true;
-                additional_rivers += 1;
+            for neighbor in neighbors {
+                if let Some(neighbor_tile) = self.tiles.get(&neighbor) {
+                    // Check if this neighbor should be a tributary
+                    let has_good_flow = self.flow_accumulation.get(&neighbor)
+                        .map(|&flow| flow >= 3.0).unwrap_or(false);
+                    
+                    let flows_to_river = self.flow_directions.get(&neighbor)
+                        .map(|(_, target)| *target == river_coord).unwrap_or(false);
+                    
+                    let appropriate_biome = match BiomeType::from_u8(neighbor_tile.biome) {
+                        BiomeType::TropicalRainforest | BiomeType::TemperateRainforest => true,
+                        BiomeType::TropicalSeasonalForest | BiomeType::TemperateDeciduousForest => true,
+                        BiomeType::TemperateGrassland | BiomeType::TaigaBorealForest => neighbor_tile.precipitation > 0.5,
+                        _ => false,
+                    };
+                    
+                    if has_good_flow && flows_to_river && appropriate_biome && neighbor_tile.elevation > self.sea_level {
+                        if let Some(tile_to_update) = self.tiles.get_mut(&neighbor) {
+                            if !tile_to_update.has_river {
+                                tile_to_update.has_river = true;
+                                improvements += 1;
+                            }
+                        }
+                    }
+                }
             }
         }
         
-        if additional_rivers > 0 {
-            println!("Added {} additional rivers based on biome characteristics", additional_rivers);
+        if improvements > 0 {
+            println!("Added {} tributary connections to main rivers", improvements);
             // Recalculate river flow rates and edges
             self.calculate_river_flow_rates();
         }
@@ -1357,24 +1609,5 @@ impl HexDirection for HexCoord {
     fn direction_to(&self, other: HexCoord) -> Option<usize> {
         let directions = self.neighbors();
         directions.iter().position(|&n| n == other)
-    }
-}
-
-// Helper for geology enum
-impl GeologyType {
-    fn from_u8(value: u8) -> Self {
-        match value {
-            0 => GeologyType::OceanicCrust,
-            1 => GeologyType::ContinentalShelf,
-            2 => GeologyType::Sedimentary,
-            3 => GeologyType::Igneous,
-            4 => GeologyType::Metamorphic,
-            5 => GeologyType::Volcanic,
-            6 => GeologyType::Limestone,
-            7 => GeologyType::Sandstone,
-            8 => GeologyType::Granite,
-            9 => GeologyType::Basalt,
-            _ => GeologyType::Sedimentary,
-        }
     }
 }

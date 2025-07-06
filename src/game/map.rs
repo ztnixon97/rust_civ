@@ -183,6 +183,7 @@ pub struct TerrainAssets {
     pub hex_mesh: Handle<Mesh>,
     pub materials: HashMap<u8, Handle<ColorMaterial>>,
     pub enhanced_materials: HashMap<HexCoord, Handle<ColorMaterial>>, // Store enhanced materials per tile
+    pub hover_materials: HashMap<HexCoord, Handle<ColorMaterial>>, // Store highlighted versions
     pub visual_config: VisualConfig,
     pub elevation_range: (f32, f32), // min, max elevation
     pub sea_level: f32,
@@ -201,7 +202,7 @@ impl Default for VisualConfig {
     fn default() -> Self {
         Self {
             elevation_shading: true,
-            elevation_intensity: 0.3,
+            elevation_intensity: 0.15, // Reduced from 0.3 to make it less dark
             water_depth_shading: true,
             strategic_highlighting: true,
             river_highlighting: true,
@@ -244,17 +245,20 @@ pub fn setup_map_with_config(
     let mut world_gen = WorldGenerator::with_config(MAP_RADIUS, config.clone());
     let world_tiles = world_gen.generate();
     
-    // Pre-create materials for all biome types with elevation shading
-    let mut biome_materials = HashMap::new();
-    let visual_config = VisualConfig::default();
-    
     // Calculate elevation range for shading
     let min_elevation = world_tiles.iter().map(|t| t.elevation).fold(f32::INFINITY, f32::min);
     let max_elevation = world_tiles.iter().map(|t| t.elevation).fold(f32::NEG_INFINITY, f32::max);
-    let elevation_range = max_elevation - min_elevation;
     
-    println!("Elevation range: {:.3} to {:.3} (range: {:.3})", min_elevation, max_elevation, elevation_range);
+    println!("Elevation range: {:.3} to {:.3}", min_elevation, max_elevation);
     
+    let visual_config = VisualConfig::default();
+    
+    // Create enhanced materials for each tile with shading applied
+    let mut biome_materials = HashMap::new();
+    let mut enhanced_materials = HashMap::new();
+    let mut hover_materials = HashMap::new();
+    
+    // First pass: create base materials for each biome
     for biome_id in 0..=62u8 {
         let biome_type = BiomeType::from_u8(biome_id);
         let base_color = biome_type.color();
@@ -262,10 +266,29 @@ pub fn setup_map_with_config(
         biome_materials.insert(biome_id, material_handle);
     }
     
+    // Second pass: create enhanced materials for each tile
+    for world_tile in &world_tiles {
+        let enhanced_color = calculate_enhanced_color(
+            world_tile,
+            &visual_config,
+            min_elevation,
+            max_elevation,
+            world_gen.sea_level,
+        );
+        let enhanced_material = materials.add(ColorMaterial::from(enhanced_color));
+        enhanced_materials.insert(world_tile.hex_coord, enhanced_material);
+        
+        // Create hover version (brighter)
+        let hover_color = brighten_color(enhanced_color, 0.3);
+        let hover_material = materials.add(ColorMaterial::from(hover_color));
+        hover_materials.insert(world_tile.hex_coord, hover_material);
+    }
+    
     commands.insert_resource(TerrainAssets {
         hex_mesh: mesh_handle.clone(),
         materials: biome_materials.clone(),
-        enhanced_materials: HashMap::new(),
+        enhanced_materials: enhanced_materials.clone(),
+        hover_materials: hover_materials.clone(),
         visual_config: visual_config.clone(),
         elevation_range: (min_elevation, max_elevation),
         sea_level: world_gen.sea_level,
@@ -283,7 +306,9 @@ pub fn setup_map_with_config(
     for world_tile in world_tiles {
         let world_pos = world_tile.hex_coord.to_world_pos(HEX_SIZE);
         let elevation_u8 = ((world_tile.elevation + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
-        let material_handle = biome_materials[&world_tile.biome].clone();
+        
+        // Use enhanced material with shading
+        let material_handle = enhanced_materials[&world_tile.hex_coord].clone();
 
         // Calculate water distance (simplified)
         let water_distance = if world_tile.elevation <= world_gen.sea_level {
@@ -391,6 +416,16 @@ fn create_hexagon_mesh(size: f32) -> Mesh {
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
     .with_inserted_indices(bevy::render::mesh::Indices::U32(indices))
+}
+
+// Helper function to brighten a color for hover effects
+fn brighten_color(color: Color, factor: f32) -> Color {
+    let srgba = color.to_srgba();
+    Color::srgb(
+        (srgba.red + factor).min(1.0),
+        (srgba.green + factor).min(1.0),
+        (srgba.blue + factor).min(1.0),
+    )
 }
 
 // Helper function to get climate description
@@ -533,18 +568,17 @@ fn apply_elevation_shading(
         return base_color;
     }
     
-    // Calculate relative elevation (0.0 to 1.0)
-    let relative_elevation = (tile.elevation - min_elevation) / elevation_range;
-    
-    // Different shading for land vs water
+    // More subtle shading that doesn't get too dark
     let shading_factor = if tile.elevation > sea_level {
-        // Land: higher = lighter, lower = darker
+        // Land: higher = slightly lighter, lower = slightly darker
         let land_elevation = (tile.elevation - sea_level) / (max_elevation - sea_level);
-        0.5 + (land_elevation - 0.5) * intensity
+        let elevation_effect = (land_elevation - 0.5) * intensity;
+        (1.0 + elevation_effect).clamp(0.6, 1.4) // Prevent getting too dark or bright
     } else {
-        // Water: deeper = darker
+        // Water: deeper = darker, but not too dark
         let water_depth = (sea_level - tile.elevation) / (sea_level - min_elevation);
-        1.0 - water_depth * intensity * 0.7
+        let depth_effect = water_depth * intensity * 0.5; // Less aggressive for water
+        (1.0 - depth_effect).clamp(0.7, 1.0) // Keep water readable
     };
     
     // Apply shading to RGB channels
@@ -556,22 +590,20 @@ fn apply_elevation_shading(
     )
 }
 
-fn apply_water_depth_shading(base_color: Color, tile: &super::world_gen::WorldTile, sea_level: f32) -> Color {
+fn apply_water_depth_shading(base_color: Color, tile: &WorldTile, sea_level: f32) -> Color {
     let depth = sea_level - tile.elevation;
     let depth_factor = (depth * 2.0).min(1.0); // Normalize depth
     
-    // Deeper water = darker blue
+    // Deeper water = darker blue, but keep it subtle
     let srgba = base_color.to_srgba();
     Color::srgb(
-        srgba.red * (1.0 - depth_factor * 0.4),
-        srgba.green * (1.0 - depth_factor * 0.3),
-        srgba.blue * (1.0 - depth_factor * 0.1), // Keep blue prominent
+        srgba.red * (1.0 - depth_factor * 0.2), // Reduced from 0.4
+        srgba.green * (1.0 - depth_factor * 0.15), // Reduced from 0.3
+        srgba.blue * (1.0 - depth_factor * 0.05), // Reduced from 0.1
     )
 }
 
-fn apply_strategic_highlighting(base_color: Color, tile: &super::world_gen::WorldTile) -> Color {
-    use super::world_gen::StrategicFeature;
-    
+fn apply_strategic_highlighting(base_color: Color, tile: &WorldTile) -> Color {
     let feature = StrategicFeature::from_u8(tile.strategic_feature);
     let highlight_color = match feature {
         StrategicFeature::RiverDelta => Color::srgb(0.2, 0.8, 0.2), // Green for fertility
@@ -598,12 +630,12 @@ fn apply_strategic_highlighting(base_color: Color, tile: &super::world_gen::Worl
 
 fn apply_river_highlighting(base_color: Color, tile: &WorldTile) -> Color {
     // Subtle blue tint for tiles with rivers
-    let river_intensity = tile.river_flow * 0.2; // Scale by river flow
+    let river_intensity = tile.river_flow * 0.1; // Reduced from 0.2
     let srgba = base_color.to_srgba();
     
     Color::srgb(
-        srgba.red * (1.0 - river_intensity * 0.3),
-        srgba.green * (1.0 - river_intensity * 0.1),
+        srgba.red * (1.0 - river_intensity * 0.2), // Reduced from 0.3
+        srgba.green * (1.0 - river_intensity * 0.05), // Reduced from 0.1
         srgba.blue.min(1.0), // Keep blue channel
     )
 }
@@ -612,34 +644,113 @@ fn apply_river_highlighting(base_color: Color, tile: &WorldTile) -> Color {
 pub fn toggle_elevation_shading(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut terrain_assets: ResMut<TerrainAssets>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    tile_query: Query<(Entity, &MapTile)>,
+    mut tile_materials: Query<&mut MeshMaterial2d<ColorMaterial>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyE) {
         terrain_assets.visual_config.elevation_shading = !terrain_assets.visual_config.elevation_shading;
         println!("Elevation shading: {}", 
                 if terrain_assets.visual_config.elevation_shading { "ON" } else { "OFF" });
+        
+        // Regenerate all materials
+        update_all_tile_materials(
+            &mut terrain_assets,
+            &mut materials,
+            &tile_query,
+            &mut tile_materials,
+        );
     }
 }
 
 pub fn adjust_elevation_intensity(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut terrain_assets: ResMut<TerrainAssets>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    tile_query: Query<(Entity, &MapTile)>,
+    mut tile_materials: Query<&mut MeshMaterial2d<ColorMaterial>>,
 ) {
     let mut changed = false;
     
     if keyboard.just_pressed(KeyCode::BracketLeft) {
         terrain_assets.visual_config.elevation_intensity = 
-            (terrain_assets.visual_config.elevation_intensity - 0.1).max(0.0);
+            (terrain_assets.visual_config.elevation_intensity - 0.05).max(0.0); // Smaller steps
         changed = true;
     }
     
     if keyboard.just_pressed(KeyCode::BracketRight) {
         terrain_assets.visual_config.elevation_intensity = 
-            (terrain_assets.visual_config.elevation_intensity + 0.1).min(1.0);
+            (terrain_assets.visual_config.elevation_intensity + 0.05).min(0.5); // Smaller max
         changed = true;
     }
     
     if changed {
-        println!("Elevation intensity: {:.1}", terrain_assets.visual_config.elevation_intensity);
+        println!("Elevation intensity: {:.2}", terrain_assets.visual_config.elevation_intensity);
+        
+        // Regenerate all materials
+        update_all_tile_materials(
+            &mut terrain_assets,
+            &mut materials,
+            &tile_query,
+            &mut tile_materials,
+        );
+    }
+}
+
+fn update_all_tile_materials(
+    terrain_assets: &mut ResMut<TerrainAssets>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    tile_query: &Query<(Entity, &MapTile)>,
+    tile_materials: &mut Query<&mut MeshMaterial2d<ColorMaterial>>,
+) {
+    // Clear old enhanced materials
+    terrain_assets.enhanced_materials.clear();
+    terrain_assets.hover_materials.clear();
+    
+    // Create new enhanced materials for each tile
+    for (entity, tile) in tile_query.iter() {
+        let world_tile = WorldTile {
+            hex_coord: tile.hex_coord,
+            elevation: tile.elevation_raw,
+            terrain: tile.terrain,
+            biome: tile.biome,
+            has_river: tile.has_river,
+            river_flow: tile.river_flow,
+            river_edges: [false; 6], // Simplified for this update
+            is_coastal: tile.is_coastal,
+            resource: tile.resource,
+            temperature: tile.temperature,
+            precipitation: tile.precipitation,
+            drainage: 0.5, // Default value
+            geology: tile.geology,
+            soil_fertility: tile.soil_fertility,
+            strategic_feature: tile.strategic_feature,
+            defensibility: tile.defensibility,
+            trade_value: tile.trade_value,
+            flood_risk: tile.flood_risk,
+            naval_access: tile.naval_access,
+        };
+        
+        let enhanced_color = calculate_enhanced_color(
+            &world_tile,
+            &terrain_assets.visual_config,
+            terrain_assets.elevation_range.0,
+            terrain_assets.elevation_range.1,
+            terrain_assets.sea_level,
+        );
+        
+        let enhanced_material = materials.add(ColorMaterial::from(enhanced_color));
+        terrain_assets.enhanced_materials.insert(tile.hex_coord, enhanced_material.clone());
+        
+        // Create hover version
+        let hover_color = brighten_color(enhanced_color, 0.3);
+        let hover_material = materials.add(ColorMaterial::from(hover_color));
+        terrain_assets.hover_materials.insert(tile.hex_coord, hover_material);
+        
+        // Update the tile's material
+        if let Ok(mut material) = tile_materials.get_mut(entity) {
+            material.0 = enhanced_material;
+        }
     }
 }
 
@@ -683,22 +794,3 @@ pub fn setup_mediterranean_world(
 ) {
     setup_map_with_config(commands, meshes, materials, WorldGenConfig::mediterranean_world());
 }
-
-// Example of custom world configuration:
-// pub fn setup_custom_world(
-//     commands: Commands, 
-//     meshes: ResMut<Assets<Mesh>>,
-//     materials: ResMut<Assets<ColorMaterial>>,
-// ) {
-//     let custom_config = WorldGenConfig {
-//         continent_count: 3,
-//         continent_size: 1.5,
-//         target_land_percentage: 0.4,
-//         global_temperature: 0.9,
-//         rainfall_multiplier: 1.2,
-//         island_frequency: 1.5,
-//         tectonic_activity: 1.3,
-//         ..Default::default()
-//     };
-//     setup_map_with_config(commands, meshes, materials, custom_config);
-// }

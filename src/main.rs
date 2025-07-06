@@ -39,8 +39,8 @@ fn main() {
             spawn_resource_markers,
             tile_info_system,
             toggle_info_display,
-            toggle_elevation_shading,
-            adjust_elevation_intensity,
+            toggle_elevation_shading_system,
+            adjust_elevation_intensity_system,
         ))
         .run();
 }
@@ -369,7 +369,6 @@ fn hex_hover_system(
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     mut tile_query: Query<(&MapTile, &mut MeshMaterial2d<ColorMaterial>), Without<Culled>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     terrain_assets: Res<TerrainAssets>,
     mut hover_state: ResMut<HoverState>,
 ) {
@@ -387,10 +386,10 @@ fn hex_hover_system(
         hover_state.previous_hovered = hover_state.current_hovered;
         hover_state.current_hovered = new_hovered;
         
-        // Reset ALL tiles to their original materials first
+        // Reset ALL tiles to their enhanced materials first (not base materials)
         for (tile, mut material_handle) in tile_query.iter_mut() {
-            if let Some(original_material) = terrain_assets.materials.get(&tile.biome) {
-                material_handle.0 = original_material.clone();
+            if let Some(enhanced_material) = terrain_assets.enhanced_materials.get(&tile.hex_coord) {
+                material_handle.0 = enhanced_material.clone();
             }
         }
         
@@ -398,19 +397,10 @@ fn hex_hover_system(
         if let Some(hovered_coord) = hover_state.current_hovered {
             for (tile, mut material_handle) in tile_query.iter_mut() {
                 if tile.hex_coord == hovered_coord {
-                    // Create a brightened version of this tile's material
-                    let biome_type = BiomeType::from_u8(tile.biome);
-                    let base_color = biome_type.color();
-                    
-                    let bright_color = Color::srgb(
-                        (base_color.to_srgba().red + 0.3).min(1.0),
-                        (base_color.to_srgba().green + 0.3).min(1.0),
-                        (base_color.to_srgba().blue + 0.3).min(1.0),
-                    );
-                    
-                    // Create a new material for the highlight
-                    let highlight_material = materials.add(ColorMaterial::from(bright_color));
-                    material_handle.0 = highlight_material;
+                    // Use the pre-computed hover material that preserves shading
+                    if let Some(hover_material) = terrain_assets.hover_materials.get(&tile.hex_coord) {
+                        material_handle.0 = hover_material.clone();
+                    }
                     break; // Found the tile, no need to continue
                 }
             }
@@ -468,5 +458,30 @@ fn debug_info_system(
                 println!("{:?}: {} ({:.1}%)", biome_type, count, percentage);
             }
         }
+        
+        // Visual config info
+        println!("=== VISUAL CONFIG ===");
+        println!("Use E to toggle elevation shading, [ and ] to adjust intensity");
     }
+}
+
+// System wrapper functions for the terrain shading toggles
+fn toggle_elevation_shading_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    terrain_assets: ResMut<TerrainAssets>,
+    materials: ResMut<Assets<ColorMaterial>>,
+    tile_query: Query<(Entity, &MapTile)>,
+    tile_materials: Query<&mut MeshMaterial2d<ColorMaterial>>,
+) {
+    toggle_elevation_shading(keyboard, terrain_assets, materials, tile_query, tile_materials);
+}
+
+fn adjust_elevation_intensity_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    terrain_assets: ResMut<TerrainAssets>,
+    materials: ResMut<Assets<ColorMaterial>>,
+    tile_query: Query<(Entity, &MapTile)>,
+    tile_materials: Query<&mut MeshMaterial2d<ColorMaterial>>,
+) {
+    adjust_elevation_intensity(keyboard, terrain_assets, materials, tile_query, tile_materials);
 }
