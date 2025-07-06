@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use crate::game::units::{Unit, UnitSelection};
 use crate::game::cities::City;
 use crate::game::civilization::CivilizationManager;
-use crate::game::game_initialization::GameState;
+use crate::game::game_initialization::{GameState, GamePhase};
 
 #[derive(Component)]
 pub struct GameStatusPanel;
@@ -114,8 +114,8 @@ pub fn update_game_status_panel(
         .unwrap_or_else(|| "Unknown".to_string());
     
     let phase_text = match game_state.current_phase {
-        super::game_initialization::GamePhase::PlayerTurn => "Your Turn",
-        super::game_initialization::GamePhase::AITurn(_) => "AI Turn",
+        GamePhase::PlayerTurn => "Your Turn",
+        GamePhase::AITurn(_) => "AI Turn",
         _ => "Processing",
     };
     

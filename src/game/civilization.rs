@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use super::hex::HexCoord;
 use std::collections::HashMap;
 
 #[derive(Resource)]
@@ -79,7 +78,7 @@ pub enum Technology {
     Currency,
     Ironworking,
     Construction,
-    Horseback_Riding,
+    HorsebackRiding,
     
     // More can be added as needed
 }

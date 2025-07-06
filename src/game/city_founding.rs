@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use super::hex::HexCoord;
 use super::map::MapTile;
 use super::units::{Unit, UnitSelection};
-use super::cities::{City, UnitType};
+use super::cities::City;
 use super::civilization::CivilizationManager;
 use super::game_initialization::GameState;
 
@@ -31,7 +31,7 @@ pub fn city_founding_system(
     unit_selection: Res<UnitSelection>,
     mut civ_manager: ResMut<CivilizationManager>,
     game_state: Res<GameState>,
-    mut founding_state: ResMut<CityFoundingState>,
+    _founding_state: ResMut<CityFoundingState>,
 ) {
     if !game_state.is_initialized {
         return;
@@ -40,7 +40,7 @@ pub fn city_founding_system(
     // Check for 'F' key to found city
     if keyboard.just_pressed(KeyCode::KeyF) {
         if let Some(selected_unit_entity) = unit_selection.selected_unit {
-            if let Ok((unit_entity, mut unit)) = unit_query.get_mut(selected_unit_entity) {
+            if let Ok((unit_entity, unit)) = unit_query.get_mut(selected_unit_entity) {
                 if unit.can_found_cities && unit.movement_points > 0 {
                     // Check if location is valid for city founding
                     if can_found_city_at(unit.hex_coord, &city_query, &tile_query) {
@@ -295,7 +295,7 @@ pub fn player_has_active_units(
 pub fn auto_turn_advance_system(
     unit_query: Query<&Unit>,
     civ_manager: Res<CivilizationManager>,
-    mut game_state: ResMut<GameState>,
+    game_state: Res<GameState>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
     if !game_state.is_initialized {

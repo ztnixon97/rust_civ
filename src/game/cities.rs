@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use super::hex::HexCoord;
 use super::map::{MapTile, TerrainType};
 use super::civilization::{CivilizationManager, CivTrait};
-use std::collections::HashMap;
 
 #[derive(Component)]
 pub struct City {
@@ -43,7 +42,7 @@ pub struct City {
     pub defense_strength: f32,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Copy , Debug, PartialEq)]
 pub enum Building {
     Granary,        // +2 food, 25% food storage bonus
     Barracks,       // +2 military unit experience, +1 defense
@@ -64,7 +63,7 @@ pub enum ProductionItem {
     Wonder(Wonder),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, Debug, PartialEq)]
 pub enum UnitType {
     Warrior,
     Archer,
@@ -201,7 +200,7 @@ impl City {
     
     fn get_tile_yields(&self, tile: &MapTile) -> (f32, f32, f32) {
         let terrain = TerrainType::from_u8(tile.terrain);
-        let (mut food, mut production, mut science) = terrain.base_yields();
+        let (mut food, mut production, science) = terrain.base_yields();
         
         // Resource bonuses
         if tile.resource != 0 {
@@ -350,7 +349,7 @@ impl City {
         }
     }
     
-    fn complete_production(&mut self, civ_manager: &mut CivilizationManager) {
+    fn complete_production(&mut self, _civ_manager: &mut CivilizationManager) {
         if let Some(item) = self.current_production.take() {
             match item {
                 ProductionItem::Building(building) => {

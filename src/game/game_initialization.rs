@@ -1,11 +1,10 @@
 use bevy::prelude::*;
 use super::hex::HexCoord;
-use super::map::{MapTile, TerrainType};
+use super::map::MapTile;
 use super::world_gen::BiomeType;
 use super::civilization::{CivilizationManager, create_default_civilizations};
 use super::cities::{City, UnitType};
 use super::units::{Unit, spawn_unit, spawn_city};
-use std::collections::HashMap;
 
 #[derive(Resource)]
 pub struct GameState {
@@ -104,13 +103,13 @@ fn find_starting_positions(tile_query: &Query<&MapTile>, num_civs: usize) -> Vec
     // Select positions ensuring minimum distance between civilizations
     let min_distance = 15; // Minimum hex distance between starting positions
     
-    for (coord, _score) in candidates {
+    for (coord, _score) in &candidates {
         let too_close = positions.iter().any(|&existing| {
-            hex_distance(coord, existing) < min_distance
+            hex_distance(*coord, existing) < min_distance
         });
         
         if !too_close {
-            positions.push(coord);
+            positions.push(*coord);
             if positions.len() >= num_civs {
                 break;
             }
@@ -232,13 +231,13 @@ fn has_freshwater_nearby(center: HexCoord, tile_query: &Query<&MapTile>) -> bool
 
 fn rate_nearby_tiles(center: HexCoord, tile_query: &Query<&MapTile>) -> f32 {
     let mut score = 0.0;
-    let mut tile_count = 0;
+    let mut _tile_count = 0;
     
     // Check tiles within 2 hex radius
     for tile in tile_query.iter() {
         let distance = hex_distance(center, tile.hex_coord);
         if distance <= 2 && distance > 0 {
-            tile_count += 1;
+            _tile_count += 1;
             
             // Distance weight (closer tiles matter more)
             let weight = match distance {

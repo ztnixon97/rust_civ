@@ -4,7 +4,7 @@ use super::map::{MapTile, TerrainType};
 use super::civilization::{CivilizationManager, CivTrait};
 use super::cities::{UnitType, City};
 
-#[derive(Component, Clone)]
+#[derive(Component)]
 pub struct Unit {
     pub unit_type: UnitType,
     pub civilization_id: u32,
@@ -515,7 +515,8 @@ fn select_unit(
         unit_selection.valid_moves = unit.calculate_valid_moves(tile_query);
         
         // Create movement indicators
-        for &move_coord in &unit_selection.valid_moves {
+        let valid_moves_copy = unit_selection.valid_moves.clone();
+        for &move_coord in &valid_moves_copy {
             let world_pos = move_coord.to_world_pos(super::map::HEX_SIZE);
             let indicator = commands.spawn((
                 MovementIndicator,

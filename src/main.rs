@@ -10,7 +10,7 @@ use game::civilization::CivilizationManager;
 use game::units::{UnitSelection, unit_selection_system, start_unit_turns, spawn_unit_markers, update_unit_marker_positions};
 use game::cities::{process_city_turns, spawn_city_markers};
 use game::game_initialization::{GameState, initialize_game, turn_system, ai_turn_system, display_turn_info, setup_turn_info_ui, TurnInfoText};
-use game::city_founding::{CityFoundingState, city_founding_system, worker_actions_system, skip_unit_system, fortify_system, auto_turn_advance_system, player_has_active_units};
+use game::city_founding::{CityFoundingState, city_founding_system, worker_actions_system, skip_unit_system, fortify_system, auto_turn_advance_system};
 use game::combat::{CombatState, combat_system, cleanup_dead_units_system};
 use ui::game_panels::{UIState, setup_ui_panels, update_game_status_panel, update_selected_unit_info, update_hotkeys_panel, toggle_ui_panels, turn_summary_system};
 
@@ -49,45 +49,45 @@ fn main() {
         // .add_systems(Startup, (setup, setup_dual_supercontinents, setup_grid_lines, setup_turn_info_ui))
         // .add_systems(Startup, (setup, setup_mediterranean_world, setup_grid_lines, setup_turn_info_ui))
         .add_systems(Update, (
-            // Core game systems
+            // Core game systems (Group 1)
             initialize_game,
             turn_system,
             ai_turn_system,
             display_turn_info,
-            
-            // City and unit management
             process_city_turns,
             start_unit_turns,
             cleanup_dead_units_system,
-            
-            // Player actions
+        ))
+        .add_systems(Update, (
+            // Player actions (Group 2)
             city_founding_system,
             worker_actions_system,
             skip_unit_system,
             fortify_system,
             auto_turn_advance_system,
             combat_system,
-            
-            // Visual systems
+        ))
+        .add_systems(Update, (
+            // Visual and UI systems (Group 3)
             spawn_city_markers,
             spawn_unit_markers,
             update_unit_marker_positions,
-            
-            // UI systems
             update_game_status_panel,
             update_selected_unit_info,
             update_hotkeys_panel,
             toggle_ui_panels,
             turn_summary_system,
-            
-            // Input and interaction
+        ))
+        .add_systems(Update, (
+            // Input and interaction (Group 4)
             camera_movement, 
             camera_zoom_system,
             basic_input, 
             hex_hover_system,
             unit_selection_system,
-            
-            // Debug and world info
+        ))
+        .add_systems(Update, (
+            // Debug and world info (Group 5)
             debug_info_system,
             toggle_grid_system,
             spawn_resource_markers,

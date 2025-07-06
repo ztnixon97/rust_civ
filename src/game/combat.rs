@@ -239,7 +239,7 @@ fn create_combat_preview(
     }
 }
 
-fn display_combat_preview(preview: &CombatPreview, civ_manager: &CivilizationManager) {
+fn display_combat_preview(preview: &CombatPreview, _civ_manager: &CivilizationManager) {
     println!("=== COMBAT PREVIEW ===");
     println!("Attacker Strength: {}", preview.attacker_strength);
     println!("Defender Strength: {} (terrain bonus: {:.1}x)", 
@@ -251,84 +251,78 @@ fn display_combat_preview(preview: &CombatPreview, civ_manager: &CivilizationMan
 fn execute_combat(
     commands: &mut Commands,
     unit_query: &mut Query<(Entity, &mut Unit)>,
-    tile_query: &Query<&MapTile>,
+    _tile_query: &Query<&MapTile>,
     preview: CombatPreview,
-    civ_manager: &CivilizationManager,
+    _civ_manager: &CivilizationManager,
 ) {
-    let Ok((_, mut attacker)) = unit_query.get_mut(preview.attacker_entity) else { return };
-    let Ok((_, mut defender)) = unit_query.get_mut(preview.defender_entity) else { return };
+    // We need to handle the borrowing more carefully
+    let mut attacker_data = None;
+    let mut defender_data = None;
     
-    let mut rng = rand::rng();
-    let roll = rng.random::<f32>();
-    
-    let attacker_wins = roll < preview.attacker_win_chance;
-    
-    println!("=== COMBAT RESULT ===");
-    println!("Roll: {:.3}, Win threshold: {:.3}", roll, preview.attacker_win_chance);
-    
-    // Mark attacker as having attacked
-    attacker.has_attacked = true;
-    attacker.movement_points = attacker.movement_points.saturating_sub(1);
-    
-    if attacker_wins {
-        // Attacker wins
-        let damage = calculate_damage(preview.attacker_strength, preview.defender_strength, true);
-        defender.take_damage(damage);
+    // First, get immutable references to calculate combat
+    {
+        let Ok((_, attacker)) = unit_query.get(preview.attacker_entity) else { return };
+        let Ok((_, defender)) = unit_query.get(preview.defender_entity) else { return };
         
-        // Experience for attacker
-        attacker.gain_experience(3);
+        let mut rng = rand::rng();
+        let roll = rng.random::<f32>();
         
-        println!("Attacker wins! Defender takes {} damage.", damage);
+        let attacker_wins = roll < preview.attacker_win_chance;
         
-        if defender.is_dead() {
-            println!("Defender unit destroyed!");
+        println!("=== COMBAT RESULT ===");
+        println!("Roll: {:.3}, Win threshold: {:.3}", roll, preview.attacker_win_chance);
+        
+        if attacker_wins {
+            let damage = calculate_damage(preview.attacker_strength, preview.defender_strength, true);
+            defender_data = Some((damage, false)); // (damage, is_killed)
+            attacker_data = Some((0, false)); // Attacker takes no damage when winning
+            println!("Attacker wins! Defender takes {} damage.", damage);
+        } else {
+            let damage = calculate_damage(preview.defender_strength, preview.attacker_strength, false);
+            attacker_data = Some((damage, false));
+            defender_data = Some((0, false)); // Defender takes no damage when winning
+            println!("Defender wins! Attacker takes {} damage.", damage);
+        }
+    }
+    
+    // Now apply the changes with mutable access
+    if let Some((damage, _)) = attacker_data {
+        if let Ok((_, mut attacker)) = unit_query.get_mut(preview.attacker_entity) {
+            attacker.has_attacked = true;
+            attacker.movement_points = attacker.movement_points.saturating_sub(1);
+            attacker.take_damage(damage);
+            attacker.gain_experience(1);
             
-            // Remove unit from civilization
-            if let Some(civ) = civ_manager.civilizations.get(&defender.civilization_id) {
-                // Note: In the actual implementation, you'd need mutable access to civ_manager
-                // This is a simplified version
-            }
-            
-            // Despawn the defender
-            commands.entity(preview.defender_entity).despawn();
-            
-            // Attacker gains extra experience for kill
-            if let Ok((_, mut attacker)) = unit_query.get_mut(preview.attacker_entity) {
-                attacker.gain_experience(2);
+            if !attacker.is_dead() {
+                attacker.gain_experience(if damage == 0 { 3 } else { 1 }); // Extra for winning
             }
         }
-    } else {
-        // Defender wins
-        let damage = calculate_damage(preview.defender_strength, preview.attacker_strength, false);
-        attacker.take_damage(damage);
-        
-        // Experience for defender
-        defender.gain_experience(2);
-        
-        println!("Defender wins! Attacker takes {} damage.", damage);
-        
+    }
+    
+    if let Some((damage, _)) = defender_data {
+        if let Ok((_, mut defender)) = unit_query.get_mut(preview.defender_entity) {
+            defender.take_damage(damage);
+            defender.gain_experience(1);
+            
+            if !defender.is_dead() {
+                defender.gain_experience(if damage == 0 { 2 } else { 1 }); // Extra for winning
+            }
+        }
+    }
+    
+    // Handle unit destruction
+    if let Ok((_, attacker)) = unit_query.get(preview.attacker_entity) {
         if attacker.is_dead() {
             println!("Attacker unit destroyed!");
-            
-            // Remove unit from civilization
-            if let Some(civ) = civ_manager.civilizations.get(&attacker.civilization_id) {
-                // Note: In the actual implementation, you'd need mutable access to civ_manager
-            }
-            
-            // Despawn the attacker
             commands.entity(preview.attacker_entity).despawn();
-            
-            // Defender gains extra experience for kill
-            defender.gain_experience(3);
         }
     }
     
-    // Both units gain some experience for participating in combat
-    if let Ok((_, mut attacker)) = unit_query.get_mut(preview.attacker_entity) {
-        attacker.gain_experience(1);
-    }
-    if let Ok((_, mut defender)) = unit_query.get_mut(preview.defender_entity) {
-        defender.gain_experience(1);
+    if let Ok((_, defender)) = unit_query.get(preview.defender_entity) {
+        if defender.is_dead() {
+            println!("Defender unit destroyed!");
+            commands.entity(preview.defender_entity).despawn();
+        }
     }
 }
 
@@ -340,7 +334,7 @@ fn get_attack_range(unit: &Unit) -> i32 {
     }
 }
 
-fn are_enemies(civ1: u32, civ2: u32, civ_manager: &CivilizationManager) -> bool {
+fn are_enemies(civ1: u32, civ2: u32, _civ_manager: &CivilizationManager) -> bool {
     // For now, all civilizations are enemies except with themselves
     // In a full game, you'd have a diplomacy system
     civ1 != civ2

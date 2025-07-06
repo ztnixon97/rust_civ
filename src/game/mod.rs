@@ -10,7 +10,7 @@ pub mod camera_zoom;
 pub mod civilization;
 pub mod game_initialization;
 pub mod combat;
-pub mod city_foudning;
+pub mod city_founding;
 
 pub use hex::*;
 pub use map::*;
@@ -19,7 +19,7 @@ pub use resources::*;
 pub use grid::*;
 pub use world_gen::*;
 pub use civilization::*;
-pub use city_foudning::*;
+pub use city_founding::*;
 pub use cities::*;
 pub use units::*;
 pub use game_initialization::*;
